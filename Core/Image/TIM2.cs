@@ -18,6 +18,13 @@ namespace OpenVIII
     public partial class TIM2 : Texture_Base
     {
 
+        public struct NativeColor {
+            public byte A;
+            public byte R;
+            public byte G;
+            public byte B;
+        }
+
         #region Fields
 
         /// <summary>
@@ -285,6 +292,46 @@ namespace OpenVIII
             {
                 Init(br2, 0);
             }
+        }  
+        
+        /// <summary>
+        /// Output 32 bit Color data for image.
+        /// </summary>
+        /// <param name="br">Binaryreader pointing to memorystream of data.</param>
+        /// <param name="palette">Color[] palette</param>
+        /// <param name="bIgnoreSize">
+        /// If true skip size check useful for files with more than just Tim
+        /// </param>
+        /// <returns>Color[]</returns>
+        /// <remarks>
+        /// This allows null palette but it doesn't seem to handle the palette being null
+        /// </remarks>
+        public NativeColor[] ReadColorData()
+        {
+            using (BinaryReader br = new BinaryReader(new MemoryStream(this.buffer)))
+            {
+                NativeColor[] pallette = GetClutColors2(br, 0);
+                br.BaseStream.Seek(textureDataPointer, SeekOrigin.Begin);
+                NativeColor[] buffer = new NativeColor[texture.Width * texture.Height]; //ARGB
+                if (bpp == 8)
+                {
+                    for (int i = 0; i < buffer.Length; i++)
+                    {
+                        byte colorkey = br.ReadByte();
+                        if (colorkey < pallette.Length)
+                        {
+                            buffer[i] = pallette[colorkey];
+                        }
+                        //else
+                        //    buffer[i] = Color.TransparentBlack; // trying something out of oridinary.
+                    }
+                }
+                else
+                    throw new Exception($"TIM_v2::CreateImageBuffer::TIM unsupported bits per pixel = {bpp}");
+                //Then in bs debug where ReadTexture store for all cluts
+                //data and then create Texture2D from there. (array of e.g. 15 texture2D)
+                return buffer;
+            }
         }
 
         /// <summary>
@@ -299,7 +346,7 @@ namespace OpenVIII
         /// <remarks>
         /// This allows null palette but it doesn't seem to handle the palette being null
         /// </remarks>
-        protected TextureBuffer CreateImageBuffer(BinaryReader br, Color[] palette = null)
+        public TextureBuffer CreateImageBuffer(BinaryReader br, Color[] palette = null)
         {
             br.BaseStream.Seek(textureDataPointer, SeekOrigin.Begin);
             TextureBuffer buffer = new TextureBuffer(texture.Width, texture.Height); //ARGB
@@ -362,12 +409,52 @@ namespace OpenVIII
             if (clut >= texture.NumOfCluts)
                 throw new Exception($"TIM_v2::GetClutColors::given clut {clut} is >= texture number of cluts {texture.NumOfCluts}");
 
+
             if (CLP)
             {
                 Color[] colorPixels = new Color[texture.NumOfColours];
                 br.BaseStream.Seek(timOffset + 20 + (texture.NumOfColours * 2 * clut), SeekOrigin.Begin);
                 for (int i = 0; i < texture.NumOfColours; i++)
                     colorPixels[i] = ABGR1555toRGBA32bit(br.ReadUInt16(), ignorealpha);
+                return colorPixels;
+            }
+            else throw new Exception($"TIM that has {bpp} bpp mode and has no clut data!");
+        }
+
+        /// <summary>
+        /// Get clut color palette
+        /// </summary>
+        /// <param name="br">Binaryreader pointing to memorystream of data.</param>
+        /// <param name="clut">Active clut data</param>
+        /// <returns>Color[]</returns>
+        protected NativeColor[] GetClutColors2(BinaryReader br, ushort clut)
+        {
+            if (clut >= texture.NumOfCluts)
+                throw new Exception($"TIM_v2::GetClutColors::given clut {clut} is >= texture number of cluts {texture.NumOfCluts}");
+
+            if (CLP)
+            {
+                ushort blue_mask = 0x7C00;
+                ushort green_mask = 0x3E0;
+                ushort red_mask = 0x1F;
+                NativeColor[] colorPixels = new NativeColor[texture.NumOfColours];
+                br.BaseStream.Seek(timOffset + 20 + (texture.NumOfColours * 2 * clut), SeekOrigin.Begin);
+                for (int i = 0; i < texture.NumOfColours; i++)
+                {
+                    ushort pixel = br.ReadUInt16();
+                    int pixelR = pixel & red_mask;
+                    int shiftedR = pixelR << 3;
+                    byte R = (byte)Math.Min(Math.Max((pixel & red_mask) << 3, 0), 255);
+                    byte G = (byte)Math.Min(Math.Max(((pixel & green_mask) >> 5) << 3, 0), 255);
+                    byte B = (byte)Math.Min(Math.Max(((pixel & blue_mask) >> 10) << 3, 0), 255);
+                    colorPixels[i] = new NativeColor
+                    {
+                        R = R,
+                        G = G,
+                        B = B,
+                        A = 255,
+                    };
+                }
                 return colorPixels;
             }
             else throw new Exception($"TIM that has {bpp} bpp mode and has no clut data!");

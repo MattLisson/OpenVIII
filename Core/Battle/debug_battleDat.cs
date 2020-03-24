@@ -910,6 +910,7 @@ namespace OpenVIII
             /// Texture 2D wrapped in TextureHandler for mod support
             /// </summary>
             public TextureHandler[] textures;
+            public TIM2[] tims;
         }
 
         /// <summary>
@@ -933,6 +934,7 @@ namespace OpenVIII
             //create arrays per count.
             textures.pTims = new uint[textures.cTims];
             textures.textures = new TextureHandler[textures.cTims];
+            textures.tims = new TIM2[textures.cTims];
             //Read pointers into array
             for (int i = 0; i < textures.cTims; i++)
                 textures.pTims[i] = br.ReadUInt32();
@@ -943,6 +945,7 @@ namespace OpenVIII
                 if (buffer[start + textures.pTims[i]] == 0x10)
                 {
                     TIM2 tm = new TIM2(buffer, start + textures.pTims[i]); //broken
+                    textures.tims[i] = tm;
                     textures.textures[i] = TextureHandler.Create($"{fileName}_{i/*.ToString("D2")*/}", tm, 0);// tm.GetTexture(0);
                 }
                 else
