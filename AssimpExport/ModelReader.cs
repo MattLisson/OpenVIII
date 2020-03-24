@@ -247,7 +247,7 @@ namespace OpenVIII.AssimpExport {
         {
             List<Material> materials = new List<Material>();
             for (int texIndex = 0; texIndex < textures.cTims; texIndex++) {
-                TIM2 oldTexture = textures.goodTextures[texIndex];
+                TIM2 oldTexture = textures.tims[texIndex];
                 textureSizeById[texIndex] = new Vector2(oldTexture.GetWidth, oldTexture.GetHeight);
                 string textureFilename = $"{saveFolder}\\{modelName}_{texIndex}.png";
                 FileInfo existingFile = new FileInfo(textureFilename);
