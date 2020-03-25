@@ -20,7 +20,9 @@ namespace OpenVIII.AssimpExport {
         private Dictionary<int, Matrix4x4> boneMatrixByBoneId;
         private Dictionary<int, Bone> boneByBoneId = new Dictionary<int, Bone>();
         private Vector2 texSize;
-        public MeshBuilder(int materialIndex,
+        public MeshBuilder(
+            int meshIndex,
+            int materialIndex,
             Vector2 texSize,
             List<Vector3D> originalVertices,
             Dictionary<int, int> boneIdByVertId,
@@ -31,8 +33,43 @@ namespace OpenVIII.AssimpExport {
             this.boneMatrixByBoneId = boneMatrixByBoneId;
             this.texSize = texSize;
 
-            mesh = new Mesh();
+            mesh = new Mesh($"mesh-{meshIndex}-{materialIndex}");
             mesh.MaterialIndex = materialIndex;
+        }
+
+        public void AddTriangle(Debug_battleDat.Triangle tri)
+        {
+            Face face = new Face();
+            int a = MaybeAddVertex(tri.A1, tri.vtb);
+            int b = MaybeAddVertex(tri.B1, tri.vtc);
+            int c = MaybeAddVertex(tri.C1, tri.vta);
+
+            face.Indices.Add(c);
+            face.Indices.Add(b);
+            face.Indices.Add(a);
+
+            mesh.Faces.Add(face);
+        }
+
+        public void AddQuad(Debug_battleDat.Quad quad)
+        {
+            Face face1 = new Face();
+            Face face2 = new Face();
+            int a = MaybeAddVertex(quad.A1, quad.vta);
+            int b = MaybeAddVertex(quad.B1, quad.vtb);
+            int c = MaybeAddVertex(quad.C1, quad.vtc);
+            int d = MaybeAddVertex(quad.D1, quad.vtd);
+
+            face1.Indices.Add(d);
+            face1.Indices.Add(b);
+            face1.Indices.Add(a);
+
+            face2.Indices.Add(c);
+            face2.Indices.Add(d);
+            face2.Indices.Add(a);
+
+            mesh.Faces.Add(face1);
+            mesh.Faces.Add(face2);
         }
 
         public int MaybeAddVertex(int oldIndex, Debug_battleDat.UV uv)
@@ -56,20 +93,6 @@ namespace OpenVIII.AssimpExport {
             return newIndex;
         }
 
-        public void AddTriangle(Debug_battleDat.Triangle tri)
-        {
-            Face face = new Face();
-            int a = MaybeAddVertex(tri.A1, tri.vtb);
-            int b = MaybeAddVertex(tri.B1, tri.vtc);
-            int c = MaybeAddVertex(tri.C1, tri.vta);
-
-            face.Indices.Add(c);
-            face.Indices.Add(b);
-            face.Indices.Add(a);
-
-            mesh.Faces.Add(face);
-        }
-
         public void AddVertToBone(int oldIndex, int newIndex)
         {
             int boneId = boneIdByVertId[oldIndex];
@@ -77,34 +100,17 @@ namespace OpenVIII.AssimpExport {
             if (boneByBoneId.ContainsKey(boneId))
             {
                 bone = boneByBoneId[boneId];
-            } else
+            }
+            else
             {
                 bone = new Bone();
+                boneByBoneId[boneId] = bone;
                 bone.Name = ModelReader.NodeNameForBoneId(boneId);
-                bone.OffsetMatrix = boneMatrixByBoneId[boneId];
+                bone.OffsetMatrix = Matrix4x4.Identity;
+                //bone.OffsetMatrix = boneMatrixByBoneId[boneId];
+                mesh.Bones.AddRange(boneByBoneId.Values);
             }
             bone.VertexWeights.Add(new VertexWeight(newIndex, 1.0f));
-        }
-
-        public void AddQuad(Debug_battleDat.Quad quad)
-        {
-            Face face1 = new Face();
-            Face face2 = new Face();
-            int a = MaybeAddVertex(quad.A1, quad.vta);
-            int b = MaybeAddVertex(quad.B1, quad.vtb);
-            int c = MaybeAddVertex(quad.C1, quad.vtc);
-            int d = MaybeAddVertex(quad.D1, quad.vtd);
-
-            face1.Indices.Add(d);
-            face1.Indices.Add(b);
-            face1.Indices.Add(a);
-
-            face2.Indices.Add(c);
-            face2.Indices.Add(d);
-            face2.Indices.Add(a);
-
-            mesh.Faces.Add(face1);
-            mesh.Faces.Add(face2);
         }
 
         public Mesh Build()
@@ -135,7 +141,10 @@ namespace OpenVIII.AssimpExport {
         {
             List<Material> materials = ReadAndSaveTextures(monsterData.textures);
             Scene.Materials.AddRange(materials);
-            AddSkeleton(monsterData.skeleton, monsterData.animHeader.animations[0].animationFrames[0]);
+            if (monsterData.animHeader.cAnimations > 0)
+            {
+                AddSkeleton(monsterData.skeleton, monsterData.animHeader.animations[0].animationFrames[0]);
+            }
             
             for (int meshIndex = 0; meshIndex < monsterData.geometry.cObjects; meshIndex++)
             {
@@ -146,10 +155,11 @@ namespace OpenVIII.AssimpExport {
                 for (int triIndex = 0; triIndex < oldMesh.cTriangles; triIndex++)
                 {
                     Debug_battleDat.Triangle tri = oldMesh.triangles[triIndex];
-                    int textureIndex = 0;// tri.textureIndex;
+                    int textureIndex = tri.textureIndex;
                     if (!meshBuildersByMaterial.ContainsKey(textureIndex)) {
                         meshBuildersByMaterial[textureIndex] =
                             new MeshBuilder(
+                                meshIndex,
                                 textureIndex,
                                 this.textureSizeById[textureIndex],
                                 vertexPositions,
@@ -162,11 +172,12 @@ namespace OpenVIII.AssimpExport {
                 for (int quadIndex = 0; quadIndex < oldMesh.cQuads; quadIndex++)
                 {
                     Debug_battleDat.Quad quad = oldMesh.quads[quadIndex];
-                    int textureIndex = 0;// quad.textureIndex;
+                    int textureIndex = quad.textureIndex;
                     if (!meshBuildersByMaterial.ContainsKey(textureIndex))
                     {
                         meshBuildersByMaterial[textureIndex] =
                             new MeshBuilder(
+                                meshIndex,
                                 textureIndex,
                                 this.textureSizeById[textureIndex],
                                 vertexPositions,
@@ -179,11 +190,11 @@ namespace OpenVIII.AssimpExport {
 
                 foreach (MeshBuilder builder in meshBuildersByMaterial.Values) {
                     Mesh mesh = builder.Build();
-                    mesh.Name = $"{modelName}-{meshIndex}";
 
                     Scene.Meshes.Add(mesh);
-
-                    Scene.RootNode.MeshIndices.Add(Scene.Meshes.Count - 1);
+                    int sceneMeshIndex = Scene.Meshes.Count - 1;
+                    //Scene.RootNode.MeshIndices.Add(sceneMeshIndex);
+                    Scene.RootNode.Children[0].MeshIndices.Add(sceneMeshIndex);
                 }
             }
         }
@@ -193,27 +204,44 @@ namespace OpenVIII.AssimpExport {
             return $"bone_{boneId}";
         }
 
+        public Node GetOrCreateNode(int boneId, Debug_battleDat.Bone[] bones, Debug_battleDat.AnimationFrame defaultPose)
+        {
+            if (boneId < 0 || boneId >= bones.Length)
+            {
+                return Scene.RootNode;
+            }
+            if (nodesByBoneId.ContainsKey(boneId))
+            {
+                return nodesByBoneId[boneId];
+            }
+
+            string nodeName = NodeNameForBoneId(boneId);
+            Debug_battleDat.Bone bone = bones[boneId];
+            Node parent = GetOrCreateNode(bone.parentId, bones, defaultPose);
+
+            Node node = new Node(nodeName, parent);
+            parent.Children.Add(node);
+            nodesByBoneId[boneId] = node;
+
+            Matrix xnaBoneMat = defaultPose.boneMatrix[boneId];
+            Matrix4x4 absoluteTransform = ConvertMatrix(xnaBoneMat);
+            boneMatrixByBoneId[boneId] = absoluteTransform;
+            Matrix4x4 parentAbsoluteTransform = boneMatrixByBoneId.ContainsKey(bone.parentId)
+                ? boneMatrixByBoneId[bone.parentId]
+                : Matrix4x4.Identity;
+            parentAbsoluteTransform.Inverse();
+
+            node.Transform = absoluteTransform * parentAbsoluteTransform;
+
+            //node.Transform = Matrix4x4.Identity;
+            return node;
+        }
+
         public void AddSkeleton(Debug_battleDat.Skeleton skeleton, Debug_battleDat.AnimationFrame defaultPose)
         {
             for(int boneIndex = 0; boneIndex < skeleton.cBones; boneIndex++)
             {
-                Debug_battleDat.Bone bone = skeleton.bones[boneIndex];
-                string nodeName = $"bone_{boneIndex}";
-                Node node;
-                if (nodesByBoneId.ContainsKey(bone.parentId)) {
-                    Node parent = nodesByBoneId[bone.parentId];
-                    node = new Node(nodeName, parent);
-                    parent.Children.Add(node);
-                } else
-                {
-                    node = new Node(nodeName);
-                 //   Scene.RootNode.Children.Add(node);
-                }
-                nodesByBoneId[boneIndex] = node;
-                Matrix xnaBoneMat = defaultPose.boneMatrix[boneIndex];
-                Matrix4x4 boneMat = ConvertMatrix(xnaBoneMat);
-                boneMatrixByBoneId[boneIndex] = boneMat;
-                node.Transform = boneMat;
+                GetOrCreateNode(boneIndex, skeleton.bones, defaultPose);
             }
         }
 
@@ -235,7 +263,7 @@ namespace OpenVIII.AssimpExport {
             {
                 for (int x = 0; x < bitmap.Width; x++)
                 {
-                    var color = colors[x + (y * bitmap.Height)];
+                    var color = colors[x + (y * bitmap.Width)];
                     bitmap.SetPixel(x, y,
                         System.Drawing.Color.FromArgb(color.A, color.R, color.G, color.B));
                 }
@@ -249,16 +277,19 @@ namespace OpenVIII.AssimpExport {
             for (int texIndex = 0; texIndex < textures.cTims; texIndex++) {
                 TIM2 oldTexture = textures.tims[texIndex];
                 textureSizeById[texIndex] = new Vector2(oldTexture.GetWidth, oldTexture.GetHeight);
-                string textureFilename = $"{saveFolder}\\{modelName}_{texIndex}.png";
-                FileInfo existingFile = new FileInfo(textureFilename);
+                string filename = $"{modelName}_{texIndex}.png";
+                string filepath = $"{saveFolder}\\{filename}";
+                FileInfo existingFile = new FileInfo(filepath);
                 if (existingFile.Exists)
                 {
                     existingFile.Delete();
                 }
-                SaveTexture(oldTexture, textureFilename);
+                SaveTexture(oldTexture, filepath);
                 TextureSlot diffuse = new TextureSlot()
                 {
-                    FilePath = textureFilename,
+                    FilePath = filename,
+                    UVIndex = 0,
+                    TextureType = TextureType.Diffuse,
                 };
                 Material material = new Material
                 {
@@ -299,7 +330,7 @@ namespace OpenVIII.AssimpExport {
                     // FF8 Space is other-handed with Z up/down.
                     Vector3D pos = new Vector3D(vert.X, vert.Z, -vert.Y);
                     Vector3D myWay = transform * pos;
-                    vertices.Add(myWay);
+                    vertices.Add(pos);
                     int vertId = vertices.Count - 1;
                     boneIdByVertId[vertId] = boneId;
                 }
