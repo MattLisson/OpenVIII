@@ -26,11 +26,19 @@ namespace OpenVIII.AssimpExport {
             Directory.CreateDirectory(outputDir);
 
 
-            for (int monsterId = 70; monsterId < 80; monsterId++)
+            for (int monsterId = 71; monsterId < 72; monsterId++)
             {
                 Debug_battleDat monsterData = Debug_battleDat.Load(monsterId,
                     Debug_battleDat.EntityType.Monster);
                 ModelReader reader = new ModelReader(outputDir, "monster", monsterData);
+                reader.Save();
+            }
+
+            for (int characterId = 0; characterId < 1; characterId++)
+            {
+                Debug_battleDat monsterData = Debug_battleDat.Load(characterId,
+                    Debug_battleDat.EntityType.Character);
+                ModelReader reader = new ModelReader(outputDir, "character", monsterData);
                 reader.Save();
             }
         }
