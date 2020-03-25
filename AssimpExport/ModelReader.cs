@@ -108,23 +108,29 @@ namespace OpenVIII.AssimpExport {
                 bone.Name = ModelReader.NodeNameForBoneId(boneId);
                 bone.OffsetMatrix = Matrix4x4.Identity;
                 //bone.OffsetMatrix = boneMatrixByBoneId[boneId];
-                mesh.Bones.AddRange(boneByBoneId.Values);
             }
             bone.VertexWeights.Add(new VertexWeight(newIndex, 1.0f));
         }
 
         public Mesh Build()
         {
+            mesh.Bones.AddRange(boneByBoneId.Values);
             return mesh;
         }
     }
 
     public class ModelReader {
         public Scene Scene { get; }
+        public Node RootNode { get; }
         Dictionary<int, int> boneIdByVertId = new Dictionary<int, int>();
         Dictionary<int, Node> nodesByBoneId = new Dictionary<int, Node>();
-        Dictionary<int, Matrix4x4> boneMatrixByBoneId = new Dictionary<int, Matrix4x4>();
+        Dictionary<int, int> parentByBoneId = new Dictionary<int, int>();
+        Dictionary<int, Matrix4x4> defaultPoseAbsoluteTransformByBone = new Dictionary<int, Matrix4x4>();
+        Dictionary<int, Matrix4x4> defaultPoseRelativeTransformByBone = new Dictionary<int, Matrix4x4>();
         Dictionary<int, Vector2> textureSizeById = new Dictionary<int, Vector2>();
+
+        // Animations stored as an array of channels. Each channel must be Animation and not NodeAnimationChannels.
+        List<Animation[]> animations = new List<Animation[]>();
         private string saveFolder;
         string modelName;
 
@@ -134,18 +140,74 @@ namespace OpenVIII.AssimpExport {
             this.modelName = $"{modelType}-{monsterData.id}";
             Scene = new Scene();
             Scene.RootNode = new Node("root");
-            AddModel(monsterData);
-        }
+            RootNode = new Node(modelName);
+            Scene.RootNode.Children.Add(RootNode);
 
-        private void AddModel(Debug_battleDat monsterData)
-        {
             List<Material> materials = ReadAndSaveTextures(monsterData.textures);
             Scene.Materials.AddRange(materials);
             if (monsterData.animHeader.cAnimations > 0)
             {
                 AddSkeleton(monsterData.skeleton, monsterData.animHeader.animations[0].animationFrames[0]);
+
+                AddAnimations(monsterData.animHeader, monsterData.skeleton.cBones);
             }
-            
+            AddModel(monsterData);
+        }
+
+        private void AddAnimations(Debug_battleDat.AnimationData animations, int boneCount)
+        {
+            for (int animationId = 0; animationId < animations.cAnimations; animationId++)
+            {
+                Debug_battleDat.Animation oldAnim = animations.animations[animationId];
+                Animation[] anims = new Animation[boneCount];
+                for (int boneId = 0; boneId < boneCount; boneId++)
+                {
+
+                    anims[boneId] = new Animation()
+                    {
+                        Name = $"anim_{animationId}",
+                        TicksPerSecond = 15.0,
+                        DurationInTicks = oldAnim.cFrames,
+                    };
+                    anims[boneId].NodeAnimationChannels.Add(new NodeAnimationChannel()
+                    {
+                        NodeName = NodeNameForBoneId(boneId),
+                        PostState = AnimationBehaviour.Default,
+                        PreState = AnimationBehaviour.Default,
+                    });
+                }
+                for (int frameIndex = 0; frameIndex < oldAnim.cFrames; frameIndex++)
+                {
+                    Debug_battleDat.AnimationFrame frame = oldAnim.animationFrames[frameIndex];
+                    double frameTime = frameIndex / 15.0;
+                    Matrix4x4[] absoluteTransforms = new Matrix4x4[boneCount];
+                    for (int boneId = 0; boneId < boneCount; boneId++)
+                    {
+                        absoluteTransforms[boneId] = ConvertMatrix(frame.boneMatrix[boneId]);
+                    }
+                    for (int boneId = 0; boneId < boneCount; boneId++)
+                    {
+                        Matrix4x4 absTransform = absoluteTransforms[boneId];
+                        Matrix4x4 parentAbsTransformInv = parentByBoneId.ContainsKey(boneId)
+                            ? absoluteTransforms[parentByBoneId[boneId]]
+                            : Matrix4x4.Identity;
+                        parentAbsTransformInv.Inverse();
+
+                        Matrix4x4 relTransform =  absTransform * parentAbsTransformInv;
+
+                        relTransform.Decompose(out Vector3D scale, out Assimp.Quaternion rotation, out Vector3D translation);
+
+                        anims[boneId].NodeAnimationChannels[0].PositionKeys.Add(new VectorKey(frameTime, translation));
+                        anims[boneId].NodeAnimationChannels[0].RotationKeys.Add(new QuaternionKey(frameTime, rotation));
+                        anims[boneId].NodeAnimationChannels[0].ScalingKeys.Add(new VectorKey(frameTime, scale));
+                    }
+                }
+                this.animations.Add(anims);
+            }
+        }
+
+        private void AddModel(Debug_battleDat monsterData)
+        {
             for (int meshIndex = 0; meshIndex < monsterData.geometry.cObjects; meshIndex++)
             {
                 Debug_battleDat.Object oldMesh = monsterData.geometry.objects[meshIndex];
@@ -164,7 +226,7 @@ namespace OpenVIII.AssimpExport {
                                 this.textureSizeById[textureIndex],
                                 vertexPositions,
                                 boneIdByVertId,
-                                boneMatrixByBoneId);
+                                defaultPoseAbsoluteTransformByBone);
                     }
                     MeshBuilder builder = meshBuildersByMaterial[textureIndex];
                     builder.AddTriangle(tri);
@@ -182,7 +244,7 @@ namespace OpenVIII.AssimpExport {
                                 this.textureSizeById[textureIndex],
                                 vertexPositions,
                                 boneIdByVertId,
-                                boneMatrixByBoneId);
+                                defaultPoseAbsoluteTransformByBone);
                     }
                     MeshBuilder builder = meshBuildersByMaterial[textureIndex];
                     builder.AddQuad(quad);
@@ -193,22 +255,25 @@ namespace OpenVIII.AssimpExport {
 
                     Scene.Meshes.Add(mesh);
                     int sceneMeshIndex = Scene.Meshes.Count - 1;
+                    // Meshes have to be added to the root bone and not the scene node for some reason.
                     //Scene.RootNode.MeshIndices.Add(sceneMeshIndex);
-                    Scene.RootNode.Children[0].MeshIndices.Add(sceneMeshIndex);
+                    RootNode.MeshIndices.Add(sceneMeshIndex);
                 }
             }
         }
         
         public static string NodeNameForBoneId(int boneId)
         {
-            return $"bone_{boneId}";
+            return $"bone_{boneId + 1}";
         }
 
         public Node GetOrCreateNode(int boneId, Debug_battleDat.Bone[] bones, Debug_battleDat.AnimationFrame defaultPose)
         {
             if (boneId < 0 || boneId >= bones.Length)
             {
-                return Scene.RootNode;
+                defaultPoseAbsoluteTransformByBone[boneId] = Matrix4x4.Identity;
+                defaultPoseRelativeTransformByBone[boneId] = Matrix4x4.Identity;
+                return RootNode;
             }
             if (nodesByBoneId.ContainsKey(boneId))
             {
@@ -217,6 +282,11 @@ namespace OpenVIII.AssimpExport {
 
             string nodeName = NodeNameForBoneId(boneId);
             Debug_battleDat.Bone bone = bones[boneId];
+            int parentId = bone.parentId;
+            if (parentId >= 0 && parentId < bones.Length)
+            {
+                parentByBoneId[boneId] = bone.parentId;
+            }
             Node parent = GetOrCreateNode(bone.parentId, bones, defaultPose);
 
             Node node = new Node(nodeName, parent);
@@ -225,13 +295,13 @@ namespace OpenVIII.AssimpExport {
 
             Matrix xnaBoneMat = defaultPose.boneMatrix[boneId];
             Matrix4x4 absoluteTransform = ConvertMatrix(xnaBoneMat);
-            boneMatrixByBoneId[boneId] = absoluteTransform;
-            Matrix4x4 parentAbsoluteTransform = boneMatrixByBoneId.ContainsKey(bone.parentId)
-                ? boneMatrixByBoneId[bone.parentId]
-                : Matrix4x4.Identity;
-            parentAbsoluteTransform.Inverse();
+            defaultPoseAbsoluteTransformByBone[boneId] = absoluteTransform;
 
-            node.Transform = absoluteTransform * parentAbsoluteTransform;
+            Matrix4x4 parentAbsoluteTransformInv = defaultPoseAbsoluteTransformByBone[bone.parentId];
+            parentAbsoluteTransformInv.Inverse();
+
+            node.Transform = absoluteTransform * parentAbsoluteTransformInv;
+            defaultPoseRelativeTransformByBone[boneId] = node.Transform;
 
             //node.Transform = Matrix4x4.Identity;
             return node;
@@ -367,17 +437,36 @@ namespace OpenVIII.AssimpExport {
 
         public void Save()
         {
-            string filename = $"{saveFolder}\\{modelName}.dae";
             AssimpContext assimp = new AssimpContext();
-            FileInfo existingFile = new FileInfo(filename);
-            if (existingFile.Exists)
-            {
-                existingFile.Delete();
-            }
+            string filename = $"{saveFolder}\\{modelName}.dae";
+
+            if (File.Exists(filename))
+                File.Delete(filename);
+
             if (!assimp.ExportFile(Scene, filename, "collada"))
             {
-                Debug.Print(Assimp.Unmanaged.AssimpLibrary.Instance.GetErrorString());
-                throw new ApplicationException($"Couldn't save {filename}");
+                Debug.Print("Failed to save {filename}\n" +
+                    Assimp.Unmanaged.AssimpLibrary.Instance.GetErrorString());
+            }
+            Scene.Meshes.Clear();
+            Scene.Materials.Clear();
+            RootNode.MeshIndices.Clear();
+
+            for (int anim = 0; anim < animations.Count; anim++)
+            {
+                filename = $"{saveFolder}\\{modelName}@anim{anim}.dae";
+
+                if (File.Exists(filename))
+                    File.Delete(filename);
+
+                Scene.Animations.Clear();
+                Scene.Animations.AddRange(animations[anim]);
+
+                if (!assimp.ExportFile(Scene, filename, "collada"))
+                {
+                    Debug.Print("Failed to save {filename}\n" +
+                        Assimp.Unmanaged.AssimpLibrary.Instance.GetErrorString());
+                }
             }
         }
     }
